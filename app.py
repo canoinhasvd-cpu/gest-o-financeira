@@ -3,7 +3,7 @@ import psycopg2
 import xml.etree.ElementTree as ET
 import pandas as pd
 import re
-from datetime import date
+from datetime import date, datetime
 import time
 
 st.set_page_config(page_title="Financeiro Pro", layout="wide")
@@ -23,7 +23,7 @@ with st.sidebar:
     opcao = st.radio("MENU", ["Gestão de NFs", "Relatórios", "Importar XML"])
     st.markdown("---")
 
-# --- CARREGAMENTO E LÓGICA ÚNICA DE DADOS ---
+# --- CARREGAMENTO DE DADOS ---
 if opcao in ["Gestão de NFs", "Relatórios"]:
     try:
         conn = conectar_banco()
@@ -33,37 +33,45 @@ if opcao in ["Gestão de NFs", "Relatórios"]:
         
         if not df.empty:
             hoje = date.today()
-            # Garante que a data do banco seja tratada como data pura para comparação
+            # Converte a coluna para o tipo 'date' do Python para garantir comparação matemática correta
             df['data_vencimento'] = pd.to_datetime(df['data_vencimento']).dt.date
             
-            # REGRA ÚNICA: Pago se marcado MANUALMENTE ou se o VENCIMENTO É ANTERIOR A HOJE
+            # Garante que a coluna 'pago' seja interpretada estritamente como booleano
+            df['pago'] = df['pago'].astype(bool)
+            
             def definir_status(row):
-                if row['pago'] == True or row['data_vencimento'] < hoje:
+                # REGRA: Se foi clicado em baixar MANUALMENTE (True no banco)
+                if row['pago'] is True:
                     return "Pago ✅", "Pago"
+                # REGRA AUTOMÁTICA: Se o vencimento é MENOR que hoje (venceu ontem ou antes)
+                elif row['data_vencimento'] < hoje:
+                    return "Pago ✅", "Pago"
+                # CASO CONTRÁRIO: Boleto para hoje ou futuro
                 else:
                     return "A pagar ⏳", "A pagar"
 
+            # Aplica a regra e cria as colunas de controle
             df[['Status', 'Categoria']] = df.apply(lambda r: pd.Series(definir_status(r)), axis=1)
     except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
+        st.error(f"Erro ao processar dados: {e}")
         df = pd.DataFrame()
 
 if opcao == "Gestão de NFs":
     st.title("Gestão de pagamentos")
     if not df.empty:
-        # Métrica de Total Geral da Rede (Soma de tudo no banco)
+        # Métrica solicitada: Total Geral acumulado
         total_geral = df['valor_parcela'].sum()
-        st.metric("Total Geral da Rede (Geral)", f"R$ {total_geral:,.2f}")
+        st.metric("Total Geral da Rede", f"R$ {total_geral:,.2f}")
         st.divider()
         
         m1, m2 = st.columns(2)
-        m1.metric("A Pagar (Boletos Futuros)", f"R$ {df[df['Categoria'] == 'A pagar']['valor_parcela'].sum():,.2f}")
-        m2.metric("Pago (Manual + Automático)", f"R$ {df[df['Categoria'] == 'Pago']['valor_parcela'].sum():,.2f}")
+        m1.metric("A Pagar (Hoje + Futuros)", f"R$ {df[df['Categoria'] == 'A pagar']['valor_parcela'].sum():,.2f}")
+        m2.metric("Pago (Efetuados + Automáticos)", f"R$ {df[df['Categoria'] == 'Pago']['valor_parcela'].sum():,.2f}")
         st.divider()
         
         f1, f2 = st.columns(2)
         with f1: l_f = st.multiselect("Loja", df['loja_destino'].unique(), default=df['loja_destino'].unique())
-        with f2: s_f = st.multiselect("Status", ["A pagar ⏳", "Pago ✅"], default=["A pagar ⏳", "Pago ✅"])
+        with f2: s_f = st.multiselect("Status", ["A pagar ⏳", "Pago ✅"], default=["A pagar ⏳"])
         
         df_f = df[(df['loja_destino'].isin(l_f)) & (df['Status'].isin(s_f))]
         
@@ -74,11 +82,12 @@ if opcao == "Gestão de NFs":
         for idx, row in df_f.iterrows():
             c1, c2, c3, c4, c5 = st.columns([1, 3, 1.5, 1.5, 1.2])
             c1.write(row['numero_nota'])
+            # Mantida a correção para o fornecedor Cálamo Distrib.
             c2.write(f"**{row['loja_destino']}** - {row['fornecedor_nome']}")
             c3.write(row['data_vencimento'].strftime('%d/%m/%Y'))
             c4.write(f"R$ {row['valor_parcela']:,.2f}")
             
-            # Só mostra o botão se o status for "A pagar"
+            # Só mostra o botão se o status for "A pagar" (não vencido e não pago)
             if row['Status'] == "A pagar ⏳":
                 with c5.popover("Baixar"):
                     if st.button("Confirmar", key=f"b_{row['id']}"):
@@ -110,6 +119,7 @@ elif opcao == "Importar XML":
                 xml_str = arquivo.read().decode('utf-8')
                 xml_str = re.sub(r'\sxmlns="[^"]+"', '', xml_str) 
                 root = ET.fromstring(xml_str)
+                # Garante que puxe o Emitente (Cálamo) e não a Transportadora (Patrus)
                 emitente = root.find('.//emit/xNome')
                 fornecedor = emitente.text if emitente is not None else "Desconhecido"
                 n_nota = root.find('.//ide/nNF').text if root.find('.//ide/nNF') is not None else "0"
