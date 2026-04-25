@@ -78,7 +78,7 @@ if opcao == "Gestão de NFs":
             st.divider()
 
 elif opcao == "Relatórios":
-    st.title("📊 Relatório Financeiro Consolidado")
+    st.title("Relatório Financeiro Consolidado")
     if not df.empty:
         relatorio = df.pivot_table(index='loja_destino', columns='Categoria', values='valor_parcela', aggfunc='sum', fill_value=0).reset_index()
         for col in ['A pagar', 'Vencido', 'Pago']:
