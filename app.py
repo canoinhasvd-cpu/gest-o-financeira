@@ -33,12 +33,16 @@ if opcao in ["Gestão de NFs", "Relatórios"]:
         conn.close()
         if not df.empty:
             hoje = date.today()
-            df['Status'] = df.apply(lambda r: "Pago ✅" if r['pago'] or r['data_vencimento'] < hoje else "A pagar ⏳", axis=1)
+            # REGRA NOVA: Se está pago OU se já passou do vencimento, entra como Pago
+            df['Categoria'] = df.apply(lambda r: "Pago" if r['pago'] or r['data_vencimento'] < hoje else "A pagar", axis=1)
+    except: 
+        df = pd.DataFrame()
 
 if opcao == "Gestão de NFs":
     st.title("Gestão de pagamentos")
     if not df.empty:
-        df['Status'] = df.apply(lambda r: "Pago ✅" if r['pago'] else ("Vencido 🚨" if r['data_vencimento'] < hoje else "A pagar ⏳"), axis=1)
+        # REGRA NOVA COM EMOJIS: Para a tabela visual
+        df['Status'] = df.apply(lambda r: "Pago ✅" if r['pago'] or r['data_vencimento'] < hoje else "A pagar ⏳", axis=1)
         
         # Métrica de Total Geral da Rede
         total_geral = df['valor_parcela'].sum()
@@ -53,7 +57,8 @@ if opcao == "Gestão de NFs":
         
         f1, f2 = st.columns(2)
         with f1: l_f = st.multiselect("Loja", df['loja_destino'].unique(), default=df['loja_destino'].unique())
-        with f2: s_f = st.multiselect("Status", ["A pagar ⏳", "Vencido 🚨", "Pago ✅"], default=["A pagar ⏳", "Vencido 🚨"])
+        # Ajustei o default para mostrar A Pagar e Pago, já que o Vencido vai ficar vazio com a nova regra
+        with f2: s_f = st.multiselect("Status", ["A pagar ⏳", "Vencido 🚨", "Pago ✅"], default=["A pagar ⏳", "Pago ✅"])
         df_f = df[(df['loja_destino'].isin(l_f)) & (df['Status'].isin(s_f))]
         
         cap1, cap2, cap3, cap4, cap5 = st.columns([1, 3, 1.5, 1.5, 1.2])
