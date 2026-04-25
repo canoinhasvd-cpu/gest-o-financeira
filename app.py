@@ -33,8 +33,7 @@ if opcao in ["Gestão de NFs", "Relatórios"]:
         conn.close()
         if not df.empty:
             hoje = date.today()
-            df['Categoria'] = df.apply(lambda r: "Pago" if r['pago'] else ("Vencido" if r['data_vencimento'] < hoje else "A pagar"), axis=1)
-    except: df = pd.DataFrame()
+            df['Status'] = df.apply(lambda r: "Pago ✅" if r['pago'] or r['data_vencimento'] < hoje else "A pagar ⏳", axis=1)
 
 if opcao == "Gestão de NFs":
     st.title("Gestão de pagamentos")
