@@ -14,7 +14,6 @@ LOJAS = {
 }
 
 def conectar_banco():
-    # Conexão segura lendo do Streamlit Secrets
     return psycopg2.connect(st.secrets["postgres_url"])
 
 # --- MENU LATERAL ---
@@ -24,41 +23,48 @@ with st.sidebar:
     opcao = st.radio("MENU", ["Gestão de NFs", "Relatórios", "Importar XML"])
     st.markdown("---")
 
-# --- LÓGICA DE DADOS ---
+# --- CARREGAMENTO E LÓGICA ÚNICA DE DADOS ---
 if opcao in ["Gestão de NFs", "Relatórios"]:
     try:
         conn = conectar_banco()
         query = "SELECT c.id, n.loja_destino, n.numero_nota, n.fornecedor_nome, c.data_vencimento, c.valor_parcela, c.pago FROM contas_a_pagar c JOIN notas_fiscais n ON c.nota_fiscal_id = n.id ORDER BY c.data_vencimento ASC"
         df = pd.read_sql(query, conn)
         conn.close()
+        
         if not df.empty:
             hoje = date.today()
-            # REGRA NOVA: Se está pago OU se já passou do vencimento, entra como Pago
-            df['Categoria'] = df.apply(lambda r: "Pago" if r['pago'] or r['data_vencimento'] < hoje else "A pagar", axis=1)
-    except: 
+            # Garante que a data do banco seja tratada como data pura para comparação
+            df['data_vencimento'] = pd.to_datetime(df['data_vencimento']).dt.date
+            
+            # REGRA ÚNICA: Pago se marcado MANUALMENTE ou se o VENCIMENTO É ANTERIOR A HOJE
+            def definir_status(row):
+                if row['pago'] == True or row['data_vencimento'] < hoje:
+                    return "Pago ✅", "Pago"
+                else:
+                    return "A pagar ⏳", "A pagar"
+
+            df[['Status', 'Categoria']] = df.apply(lambda r: pd.Series(definir_status(r)), axis=1)
+    except Exception as e:
+        st.error(f"Erro ao carregar dados: {e}")
         df = pd.DataFrame()
 
 if opcao == "Gestão de NFs":
     st.title("Gestão de pagamentos")
     if not df.empty:
-        # REGRA NOVA COM EMOJIS: Para a tabela visual
-        df['Status'] = df.apply(lambda r: "Pago ✅" if r['pago'] or r['data_vencimento'] < hoje else "A pagar ⏳", axis=1)
-        
-        # Métrica de Total Geral da Rede
+        # Métrica de Total Geral da Rede (Soma de tudo no banco)
         total_geral = df['valor_parcela'].sum()
-        st.metric("Total Geral da Rede (Todos os Status)", f"R$ {total_geral:,.2f}")
+        st.metric("Total Geral da Rede (Geral)", f"R$ {total_geral:,.2f}")
         st.divider()
         
-        m1, m2, m3 = st.columns(3)
-        m1.metric("A Pagar", f"R$ {df[df['Categoria'] == 'A pagar']['valor_parcela'].sum():,.2f}")
-        m2.metric("Vencido", f"R$ {df[df['Categoria'] == 'Vencido']['valor_parcela'].sum():,.2f}")
-        m3.metric("Pago", f"R$ {df[df['Categoria'] == 'Pago']['valor_parcela'].sum():,.2f}")
+        m1, m2 = st.columns(2)
+        m1.metric("A Pagar (Boletos Futuros)", f"R$ {df[df['Categoria'] == 'A pagar']['valor_parcela'].sum():,.2f}")
+        m2.metric("Pago (Manual + Automático)", f"R$ {df[df['Categoria'] == 'Pago']['valor_parcela'].sum():,.2f}")
         st.divider()
         
         f1, f2 = st.columns(2)
         with f1: l_f = st.multiselect("Loja", df['loja_destino'].unique(), default=df['loja_destino'].unique())
-        # Ajustei o default para mostrar A Pagar e Pago, já que o Vencido vai ficar vazio com a nova regra
-        with f2: s_f = st.multiselect("Status", ["A pagar ⏳", "Vencido 🚨", "Pago ✅"], default=["A pagar ⏳", "Pago ✅"])
+        with f2: s_f = st.multiselect("Status", ["A pagar ⏳", "Pago ✅"], default=["A pagar ⏳", "Pago ✅"])
+        
         df_f = df[(df['loja_destino'].isin(l_f)) & (df['Status'].isin(s_f))]
         
         cap1, cap2, cap3, cap4, cap5 = st.columns([1, 3, 1.5, 1.5, 1.2])
@@ -71,23 +77,26 @@ if opcao == "Gestão de NFs":
             c2.write(f"**{row['loja_destino']}** - {row['fornecedor_nome']}")
             c3.write(row['data_vencimento'].strftime('%d/%m/%Y'))
             c4.write(f"R$ {row['valor_parcela']:,.2f}")
-            if not row['pago']:
+            
+            # Só mostra o botão se o status for "A pagar"
+            if row['Status'] == "A pagar ⏳":
                 with c5.popover("Baixar"):
                     if st.button("Confirmar", key=f"b_{row['id']}"):
                         c = conectar_banco(); cur = c.cursor()
                         cur.execute("UPDATE contas_a_pagar SET pago = TRUE WHERE id = %s", (int(row['id']),))
                         c.commit(); cur.close(); c.close()
                         st.rerun()
-            else: c5.write("✅")
+            else:
+                c5.write("✅")
             st.divider()
 
 elif opcao == "Relatórios":
-    st.title("Relatório Financeiro Consolidado")
+    st.title("📊 Relatório Financeiro Consolidado")
     if not df.empty:
         relatorio = df.pivot_table(index='loja_destino', columns='Categoria', values='valor_parcela', aggfunc='sum', fill_value=0).reset_index()
-        for col in ['A pagar', 'Vencido', 'Pago']:
+        for col in ['A pagar', 'Pago']:
             if col not in relatorio.columns: relatorio[col] = 0
-        relatorio['Total'] = relatorio['A pagar'] + relatorio['Vencido'] + relatorio['Pago']
+        relatorio['Total'] = relatorio['A pagar'] + relatorio['Pago']
         st.info(f"💰 **Valor Total Previsto: R$ {relatorio['Total'].sum():,.2f}**")
         st.dataframe(relatorio, use_container_width=True, hide_index=True)
 
@@ -101,21 +110,13 @@ elif opcao == "Importar XML":
                 xml_str = arquivo.read().decode('utf-8')
                 xml_str = re.sub(r'\sxmlns="[^"]+"', '', xml_str) 
                 root = ET.fromstring(xml_str)
-                
-                # --- BUSCA PRECISA DO FORNECEDOR (EMITENTE) CORRIGIDA ---
                 emitente = root.find('.//emit/xNome')
                 fornecedor = emitente.text if emitente is not None else "Desconhecido"
-                
-                # Busca outros dados
                 n_nota = root.find('.//ide/nNF').text if root.find('.//ide/nNF') is not None else "0"
                 v_total = root.find('.//ICMSTot/vNF').text if root.find('.//ICMSTot/vNF') is not None else "0.00"
                 d_emi = (root.find('.//ide/dhEmi').text or root.find('.//ide/dEmi').text).split('T')[0]
-                
-                # CNPJ Destinatário para identificar a Loja
                 dest_cnpj = root.find('.//dest/CNPJ').text if root.find('.//dest/CNPJ') is not None else "0"
                 loja = LOJAS.get(dest_cnpj, f"Outros ({dest_cnpj})")
-                
-                # Chave
                 infNFe = root.find('.//infNFe')
                 chave = infNFe.attrib['Id'][3:] if infNFe is not None else "CH"+str(int(time.time()))
 
@@ -123,8 +124,6 @@ elif opcao == "Importar XML":
                 if not cur.fetchone():
                     cur.execute("INSERT INTO notas_fiscais (chave_acesso, numero_nota, fornecedor_nome, fornecedor_cnpj, data_emissao, valor_total, loja_destino) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id", (chave, n_nota, fornecedor, '0', d_emi, v_total, loja))
                     id_nota = cur.fetchone()[0]
-                    
-                    # --- BUSCA PRECISA DE PARCELAS CORRIGIDA ---
                     duplicatas = root.findall('.//cobr/dup')
                     if duplicatas:
                         for dup in duplicatas:
