@@ -6,7 +6,7 @@ import re
 from datetime import date
 import time
 
-st.set_page_config(page_title="Financeiro", layout="wide")
+st.set_page_config(page_title="Financeiro Pro", layout="wide")
 
 LOJAS = {
     "79503280000100": "Matriz", "14995048000191": "VD", "79503280000291": "Papanduva", 
@@ -40,18 +40,27 @@ if opcao == "Gestão de NFs":
     st.title("Gestão de pagamentos")
     if not df.empty:
         df['Status'] = df.apply(lambda r: "Pago ✅" if r['pago'] else ("Vencido 🚨" if r['data_vencimento'] < hoje else "A pagar ⏳"), axis=1)
+        
+        # Métrica de Total Geral da Rede
+        total_geral = df['valor_parcela'].sum()
+        st.metric("Total Geral da Rede (Todos os Status)", f"R$ {total_geral:,.2f}")
+        st.divider()
+        
         m1, m2, m3 = st.columns(3)
         m1.metric("A Pagar", f"R$ {df[df['Categoria'] == 'A pagar']['valor_parcela'].sum():,.2f}")
         m2.metric("Vencido", f"R$ {df[df['Categoria'] == 'Vencido']['valor_parcela'].sum():,.2f}")
         m3.metric("Pago", f"R$ {df[df['Categoria'] == 'Pago']['valor_parcela'].sum():,.2f}")
         st.divider()
+        
         f1, f2 = st.columns(2)
         with f1: l_f = st.multiselect("Loja", df['loja_destino'].unique(), default=df['loja_destino'].unique())
         with f2: s_f = st.multiselect("Status", ["A pagar ⏳", "Vencido 🚨", "Pago ✅"], default=["A pagar ⏳", "Vencido 🚨"])
         df_f = df[(df['loja_destino'].isin(l_f)) & (df['Status'].isin(s_f))]
+        
         cap1, cap2, cap3, cap4, cap5 = st.columns([1, 3, 1.5, 1.5, 1.2])
         cap1.write("**NF**"); cap2.write("**Unidade / Fornecedor**"); cap3.write("**Vencimento**"); cap4.write("**Valor**"); cap5.write("**Ação**")
         st.divider()
+        
         for idx, row in df_f.iterrows():
             c1, c2, c3, c4, c5 = st.columns([1, 3, 1.5, 1.5, 1.2])
             c1.write(row['numero_nota'])
@@ -89,7 +98,7 @@ elif opcao == "Importar XML":
                 xml_str = re.sub(r'\sxmlns="[^"]+"', '', xml_str) 
                 root = ET.fromstring(xml_str)
                 
-                # --- BUSCA PRECISA DO FORNECEDOR (EMITENTE) ---
+                # --- BUSCA PRECISA DO FORNECEDOR (EMITENTE) CORRIGIDA ---
                 emitente = root.find('.//emit/xNome')
                 fornecedor = emitente.text if emitente is not None else "Desconhecido"
                 
@@ -111,7 +120,7 @@ elif opcao == "Importar XML":
                     cur.execute("INSERT INTO notas_fiscais (chave_acesso, numero_nota, fornecedor_nome, fornecedor_cnpj, data_emissao, valor_total, loja_destino) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id", (chave, n_nota, fornecedor, '0', d_emi, v_total, loja))
                     id_nota = cur.fetchone()[0]
                     
-                    # --- BUSCA PRECISA DE PARCELAS ---
+                    # --- BUSCA PRECISA DE PARCELAS CORRIGIDA ---
                     duplicatas = root.findall('.//cobr/dup')
                     if duplicatas:
                         for dup in duplicatas:
