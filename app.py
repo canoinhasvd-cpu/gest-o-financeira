@@ -94,7 +94,7 @@ elif opcao == "Importar XML":
         conn = conectar_banco(); cur = conn.cursor()
         for arquivo in arquivos:
             try:
-                xml_str = arquivo.read().decode('latin-1')
+                xml_str = arquivo.read().decode('utf-8')
                 xml_str = re.sub(r'\sxmlns="[^"]+"', '', xml_str) 
                 root = ET.fromstring(xml_str)
                 
