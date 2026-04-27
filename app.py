@@ -6,7 +6,7 @@ import re
 from datetime import date, datetime
 import time
 
-st.set_page_config(page_title="Financeiro Pro", layout="wide")
+st.set_page_config(page_title="Financeiro", layout="wide")
 
 LOJAS = {
     "79503280000100": "Matriz", "14995048000191": "VD", "79503280000291": "Papanduva", 
@@ -23,7 +23,7 @@ with st.sidebar:
     opcao = st.radio("MENU", ["Gestão de NFs", "Relatórios", "Importar XML"])
     st.markdown("---")
 
-# --- CARREGAMENTO DE DADOS ---
+# --- LÓGICA DE CARREGAMENTO DE DADOS ---
 if opcao in ["Gestão de NFs", "Relatórios"]:
     try:
         conn = conectar_banco()
@@ -33,44 +33,33 @@ if opcao in ["Gestão de NFs", "Relatórios"]:
         
         if not df.empty:
             hoje = date.today()
-            # Converte a coluna para o tipo 'date' do Python para garantir comparação matemática correta
+            # Tratamento de segurança para as datas funcionarem matematicamente
             df['data_vencimento'] = pd.to_datetime(df['data_vencimento']).dt.date
-            
-            # Garante que a coluna 'pago' seja interpretada estritamente como booleano
             df['pago'] = df['pago'].astype(bool)
             
-            def definir_status(row):
-                # REGRA: Se foi clicado em baixar MANUALMENTE (True no banco)
-                if row['pago'] is True:
-                    return "Pago ✅", "Pago"
-                # REGRA AUTOMÁTICA: Se o vencimento é MENOR que hoje (venceu ontem ou antes)
-                elif row['data_vencimento'] < hoje:
-                    return "Pago ✅", "Pago"
-                # CASO CONTRÁRIO: Boleto para hoje ou futuro
-                else:
-                    return "A pagar ⏳", "A pagar"
-
-            # Aplica a regra e cria as colunas de controle
-            df[['Status', 'Categoria']] = df.apply(lambda r: pd.Series(definir_status(r)), axis=1)
+            # A REGRA MÁGICA AQUI: Baixa automática 1 dia após o vencimento
+            df['Categoria'] = df.apply(lambda r: "Pago" if r['pago'] or r['data_vencimento'] < hoje else "A pagar", axis=1)
     except Exception as e:
-        st.error(f"Erro ao processar dados: {e}")
+        st.error(f"Erro ao carregar banco: {e}")
         df = pd.DataFrame()
 
+# --- PÁGINA: GESTÃO DE NFs ---
 if opcao == "Gestão de NFs":
     st.title("Gestão de pagamentos")
     if not df.empty:
-        # Métrica solicitada: Total Geral acumulado
-        total_geral = df['valor_parcela'].sum()
-        st.metric("Total Geral da Rede", f"R$ {total_geral:,.2f}")
-        st.divider()
+        hoje = date.today()
+        # Aplica a mesma regra para o Status visual
+        df['Status'] = df.apply(lambda r: "Pago ✅" if r['pago'] or r['data_vencimento'] < hoje else "A pagar ⏳", axis=1)
         
+        # Como o "Vencido" não existe mais na prática, deixamos apenas 2 colunas de métricas
         m1, m2 = st.columns(2)
-        m1.metric("A Pagar (Hoje + Futuros)", f"R$ {df[df['Categoria'] == 'A pagar']['valor_parcela'].sum():,.2f}")
-        m2.metric("Pago (Efetuados + Automáticos)", f"R$ {df[df['Categoria'] == 'Pago']['valor_parcela'].sum():,.2f}")
-        st.divider()
+        m1.metric("A Pagar (Hoje e Futuros)", f"R$ {df[df['Categoria'] == 'A pagar']['valor_parcela'].sum():,.2f}")
+        m2.metric("Pago (Manuais e Automáticos)", f"R$ {df[df['Categoria'] == 'Pago']['valor_parcela'].sum():,.2f}")
         
+        st.divider()
         f1, f2 = st.columns(2)
         with f1: l_f = st.multiselect("Loja", df['loja_destino'].unique(), default=df['loja_destino'].unique())
+        # Filtro default mostra apenas o que está "A pagar" para limpar a tela
         with f2: s_f = st.multiselect("Status", ["A pagar ⏳", "Pago ✅"], default=["A pagar ⏳"])
         
         df_f = df[(df['loja_destino'].isin(l_f)) & (df['Status'].isin(s_f))]
@@ -82,12 +71,11 @@ if opcao == "Gestão de NFs":
         for idx, row in df_f.iterrows():
             c1, c2, c3, c4, c5 = st.columns([1, 3, 1.5, 1.5, 1.2])
             c1.write(row['numero_nota'])
-            # Mantida a correção para o fornecedor Cálamo Distrib.
             c2.write(f"**{row['loja_destino']}** - {row['fornecedor_nome']}")
             c3.write(row['data_vencimento'].strftime('%d/%m/%Y'))
             c4.write(f"R$ {row['valor_parcela']:,.2f}")
             
-            # Só mostra o botão se o status for "A pagar" (não vencido e não pago)
+            # Só exibe botão de baixar se estiver "A pagar"
             if row['Status'] == "A pagar ⏳":
                 with c5.popover("Baixar"):
                     if st.button("Confirmar", key=f"b_{row['id']}"):
@@ -95,36 +83,72 @@ if opcao == "Gestão de NFs":
                         cur.execute("UPDATE contas_a_pagar SET pago = TRUE WHERE id = %s", (int(row['id']),))
                         c.commit(); cur.close(); c.close()
                         st.rerun()
-            else:
-                c5.write("✅")
+            else: c5.write("✅")
             st.divider()
+    else:
+        st.info("Nenhum dado encontrado. Importe XMLs para começar.")
 
+# --- PÁGINA: RELATÓRIOS ---
 elif opcao == "Relatórios":
-    st.title("📊 Relatório Financeiro Consolidado")
+    st.title("Relatório Financeiro Detalhado")
     if not df.empty:
-        relatorio = df.pivot_table(index='loja_destino', columns='Categoria', values='valor_parcela', aggfunc='sum', fill_value=0).reset_index()
-        for col in ['A pagar', 'Pago']:
-            if col not in relatorio.columns: relatorio[col] = 0
-        relatorio['Total'] = relatorio['A pagar'] + relatorio['Pago']
-        st.info(f"💰 **Valor Total Previsto: R$ {relatorio['Total'].sum():,.2f}**")
-        st.dataframe(relatorio, use_container_width=True, hide_index=True)
+        df['Mês/Ano'] = df['data_vencimento'].apply(lambda x: x.strftime('%m/%Y'))
+        
+        meses_disponiveis = sorted(df['Mês/Ano'].unique(), key=lambda x: datetime.strptime(x, '%m/%Y'))
+        mes_selecionado = st.multiselect("Filtrar por Mês/Ano", meses_disponiveis, default=meses_disponiveis)
+        df_filtrado = df[df['Mês/Ano'].isin(mes_selecionado)]
 
+        t_geral = df_filtrado['valor_parcela'].sum()
+        t_pago = df_filtrado[df_filtrado['Categoria'] == 'Pago']['valor_parcela'].sum()
+        t_pendente = df_filtrado[df_filtrado['Categoria'] != 'Pago']['valor_parcela'].sum()
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total no Período", f"R$ {t_geral:,.2f}")
+        c2.metric("Total Pago", f"R$ {t_pago:,.2f}")
+        c3.metric("Total Pendente", f"R$ {t_pendente:,.2f}")
+
+        st.divider()
+
+        lojas_no_df = sorted(df_filtrado['loja_destino'].unique())
+        tabs = st.tabs(lojas_no_df)
+
+        for i, nome_loja in enumerate(lojas_no_df):
+            with tabs[i]:
+                df_loja = df_filtrado[df_filtrado['loja_destino'] == nome_loja]
+                st.write(f"**Resumo Mensal - {nome_loja}**")
+                pivot_loja = df_loja.pivot_table(index='Mês/Ano', columns='Categoria', values='valor_parcela', aggfunc='sum', fill_value=0).reset_index()
+                st.dataframe(pivot_loja, use_container_width=True, hide_index=True)
+
+                with st.expander("Ver todas as notas desta unidade"):
+                    st.table(df_loja[['numero_nota', 'fornecedor_nome', 'data_vencimento', 'valor_parcela', 'Categoria']])
+
+        st.divider()
+        st.subheader("Matriz Consolidada (Loja x Mês)")
+        matriz = df_filtrado.pivot_table(index='loja_destino', columns='Mês/Ano', values='valor_parcela', aggfunc='sum', fill_value=0)
+        st.dataframe(matriz.style.format("R$ {:,.2f}"), use_container_width=True)
+
+    else:
+        st.info("Importe XMLs para visualizar os relatórios.")
+
+# --- PÁGINA: IMPORTAR XML ---
 elif opcao == "Importar XML":
     st.title("Importar XMLs")
-    arquivos = st.file_uploader("Selecione", type=['xml'], accept_multiple_files=True)
-    if arquivos and st.button("Processar"):
+    arquivos = st.file_uploader("Selecione os arquivos", type=['xml'], accept_multiple_files=True)
+    if arquivos and st.button("Processar Lote"):
         conn = conectar_banco(); cur = conn.cursor()
         for arquivo in arquivos:
             try:
-                xml_str = arquivo.read().decode('utf-8')
+                raw_data = arquivo.read()
+                try: xml_str = raw_data.decode('utf-8')
+                except UnicodeDecodeError: xml_str = raw_data.decode('latin-1')
                 xml_str = re.sub(r'\sxmlns="[^"]+"', '', xml_str) 
                 root = ET.fromstring(xml_str)
-                # Garante que puxe o Emitente (Cálamo) e não a Transportadora (Patrus)
-                emitente = root.find('.//emit/xNome')
-                fornecedor = emitente.text if emitente is not None else "Desconhecido"
+                emit_node = root.find('.//emit/xNome')
+                fornecedor = emit_node.text.strip() if emit_node is not None else "Desconhecido"
                 n_nota = root.find('.//ide/nNF').text if root.find('.//ide/nNF') is not None else "0"
                 v_total = root.find('.//ICMSTot/vNF').text if root.find('.//ICMSTot/vNF') is not None else "0.00"
-                d_emi = (root.find('.//ide/dhEmi').text or root.find('.//ide/dEmi').text).split('T')[0]
+                d_emi_node = root.find('.//ide/dhEmi') or root.find('.//ide/dEmi')
+                d_emi = d_emi_node.text.split('T')[0] if d_emi_node is not None else str(date.today())
                 dest_cnpj = root.find('.//dest/CNPJ').text if root.find('.//dest/CNPJ') is not None else "0"
                 loja = LOJAS.get(dest_cnpj, f"Outros ({dest_cnpj})")
                 infNFe = root.find('.//infNFe')
