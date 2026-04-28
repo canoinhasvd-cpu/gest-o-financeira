@@ -115,12 +115,20 @@ elif opcao == "Relatórios":
         for i, nome_loja in enumerate(lojas_no_df):
             with tabs[i]:
                 df_loja = df_filtrado[df_filtrado['loja_destino'] == nome_loja]
+                
+                # Tabela de evolução mensal da loja
                 st.write(f"**Resumo Mensal - {nome_loja}**")
                 pivot_loja = df_loja.pivot_table(index='Mês/Ano', columns='Categoria', values='valor_parcela', aggfunc='sum', fill_value=0).reset_index()
-                st.dataframe(pivot_loja, use_container_width=True, hide_index=True)
+                
+                # CORREÇÃO 1: Formata apenas as colunas de dinheiro do Resumo Mensal
+                colunas_dinheiro = [c for c in pivot_loja.columns if c != 'Mês/Ano']
+                st.dataframe(pivot_loja.style.format({c: "R$ {:,.2f}" for c in colunas_dinheiro}), use_container_width=True, hide_index=True)
 
                 with st.expander("Ver todas as notas desta unidade"):
-                    st.table(df_loja[['numero_nota', 'fornecedor_nome', 'data_vencimento', 'valor_parcela', 'Categoria']])
+                    # CORREÇÃO 2: Formata a coluna de valor na tabela detalhada
+                    df_exibicao = df_loja[['numero_nota', 'fornecedor_nome', 'data_vencimento', 'valor_parcela', 'Categoria']].copy()
+                    df_exibicao['valor_parcela'] = df_exibicao['valor_parcela'].apply(lambda x: f"R$ {x:,.2f}")
+                    st.table(df_exibicao)
 
         st.divider()
         st.subheader("Matriz Consolidada (Loja x Mês)")
