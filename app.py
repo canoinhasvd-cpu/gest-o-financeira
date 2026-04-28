@@ -133,6 +133,10 @@ elif opcao == "Relatórios":
         st.divider()
         st.subheader("Matriz Consolidada (Loja x Mês)")
         matriz = df_filtrado.pivot_table(index='loja_destino', columns='Mês/Ano', values='valor_parcela', aggfunc='sum', fill_value=0)
+        
+        # Adiciona a linha de Total Geral no final da tabela
+        matriz.loc['Total Geral'] = matriz.sum()
+        
         st.dataframe(matriz.style.format("R$ {:,.2f}"), use_container_width=True)
 
     else:
